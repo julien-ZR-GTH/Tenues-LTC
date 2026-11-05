@@ -396,7 +396,7 @@ details.ign summary{cursor:pointer;font-weight:600}
       <button class="btn" id="qpBtn" type="button" title="Déclarer un paiement"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M2.5 10h19"/><path d="M6.5 14.5h4"/></svg><span>Déclarer un paiement</span></button>
       <input type="file" id="file" accept=".xlsx,.xlsm,.xls" hidden>
       <button class="btn primary" id="loadBtn" type="button" title="Recharger la dernière version en ligne"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg><span>Recharger</span></button>
-      <button class="btn" id="exportBtn" type="button" title="Enregistrer les données en ligne"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg><span>Enregistrer</span><i class="dot" id="exportDot" hidden></i></button>
+      <button class="btn" id="exportBtn" type="button" title="Enregistrement automatique actif. Cliquez pour enregistrer tout de suite et garder une copie dans l'historique"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg><span>Enregistrer</span><i class="dot" id="exportDot" hidden></i></button>
       <button class="btn icon" id="dlBtn" type="button" title="Télécharger une copie Excel" aria-label="Télécharger une copie Excel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 11v6"/><path d="m9.5 14.5 2.5 2.5 2.5-2.5"/></svg></button>
       <button class="btn icon" id="logoutBtn" type="button" title="Se déconnecter" aria-label="Se déconnecter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg></button>
     </div>
@@ -687,7 +687,7 @@ function blankModel(){
 let saveT = null;
 function persist(){ clearTimeout(saveT); saveT = setTimeout(() => { try { localStorage.setItem(STORE_KEY, JSON.stringify(S.m)); } catch(_){} }, 300); }
 function readSaved(){ try { const m = JSON.parse(localStorage.getItem(STORE_KEY) || "null"); return m && m.people ? ensureCap(m) : null; } catch(_){ return null; } }
-function touch(){ S.m.dirty = true; S.m.modifiedAt = new Date().toISOString(); persist(); renderNav(); renderHeaderState(); }
+function touch(){ S.m.dirty = true; S.m.modifiedAt = new Date().toISOString(); S.rev = (S.rev || 0) + 1; persist(); renderNav(); renderHeaderState(); scheduleAutosave(); }
 
 /* ---------- messages ---------- */
 function showMsg(html, kind, sticky){ const m = $("#msg"); m.className = "msg " + kind; m.innerHTML = html; m.hidden = false; clearTimeout(showMsg.t); if (!sticky) showMsg.t = setTimeout(()=> m.hidden = true, 6000); return m; }
@@ -768,7 +768,7 @@ async function loadRemote(){
     const { data, error } = await bucket().download(SB_FILE);
     if (error) throw error;
     const m = loadBytes(new Uint8Array(await data.arrayBuffer()), SB_FILE);
-    m.remoteAt = meta.updated_at; m.dirty = false; S.remoteState = "ok"; persist();
+    m.remoteAt = meta.updated_at; m.dirty = false; S.remoteState = "ok"; S.conflict = false; clearTimeout(autoT); persist();
     go("synthese", true);
     showMsg(`Version en ligne chargée : ${plural(m.people.length,"commande")}.`, "ok");
   } catch(err){
@@ -781,7 +781,7 @@ async function loadRemote(){
 /* After sign-in: unsaved work on this browser is never overwritten without asking */
 function enterApp(){
   $("#login").hidden = true;
-  if (S.m){ hideMsg(); renderHeaderState(); return; }
+  if (S.m){ hideMsg(); renderHeaderState(); if (S.m.dirty) scheduleAutosave(500); return; }
   const saved = readSaved();
   if (saved && saved.dirty){ S.remoteState = "resume"; S.view = "accueil"; render(); }
   else loadRemote();
@@ -797,7 +797,7 @@ $("#loginForm").addEventListener("submit", async e => {
   finally { btn.disabled = false; }
 });
 async function logout(){
-  clearTimeout(saveT); try { localStorage.removeItem(STORE_KEY); } catch(_){}
+  clearTimeout(saveT); clearTimeout(autoT); S.conflict = false; S.lastBackup = 0; try { localStorage.removeItem(STORE_KEY); } catch(_){}
   await sb.auth.signOut({ scope:"local" }).catch(() => {});
   S.m = null; S.back = []; S.sel = null; S.view = "accueil"; S.remoteState = "idle"; hideMsg(); render(); showLogin();
 }
@@ -950,6 +950,23 @@ function saveError(err){
   else if (c === "rate_limited") showMsg("Une fenêtre d'enregistrement est déjà ouverte. Terminez-la puis réessayez.", "warn");
   else showMsg("L'enregistrement du fichier a échoué (" + esc(c || err?.message || "erreur") + ").", "err", true);
 }
+/* Autosave: each edit restarts the delay, so a burst of typing makes a single upload */
+const AUTOSAVE_MS = 4000, RETRY_MS = 30000, BACKUP_EVERY_MS = 30 * 60000;
+let autoT = null;
+function scheduleAutosave(delay){
+  clearTimeout(autoT);
+  if (!S.m || S.conflict) return;
+  autoT = setTimeout(() => { if (S.m && S.m.dirty && $("#login").hidden) doExport({ auto:true }); }, delay ?? AUTOSAVE_MS);
+}
+/* When someone returns to the tab with nothing pending, offer the colleague's newer version */
+async function checkNewer(){
+  if (!S.m || S.m.dirty || S.saving || !$("#login").hidden) return;
+  const meta = await remoteMeta().catch(() => null);
+  if (!meta || !S.m || S.m.dirty || meta.updated_at === S.m.remoteAt) return;
+  const m = showMsg(`Une version plus récente a été enregistrée. <button class="btn primary" id="newerLoad" type="button">Recharger</button>`, "warn", true);
+  m.querySelector("#newerLoad").onclick = () => { hideMsg(); loadRemote(); };
+}
+window.addEventListener("focus", checkNewer);
 async function downloadCopy(){
   if (!S.m) return;
   let buf; try { buf = buildWorkbook(); } catch(err){ showMsg("Le fichier Excel n'a pas pu être généré : " + esc(err.message || err), "err", true); return; }
@@ -957,32 +974,47 @@ async function downloadCopy(){
   try { await saveFile(filename, buf); showMsg(`Copie « ${esc(filename)} » téléchargée.`, "ok"); } catch(err){ saveError(err); }
 }
 $("#dlBtn").addEventListener("click", downloadCopy);
-/* Saves online: copies the current version to historique/, then replaces it */
-async function doExport(force){
-  if (!S.m || S.saving) return;
+/* Saves online. Manual saves always keep a copy in historique/; autosaves keep one at most every 30 minutes */
+async function doExport(opt){
+  const force = opt?.force === true, auto = opt?.auto === true;
+  if (!S.m) return;
+  if (S.saving){ if (auto) scheduleAutosave(); return; }
+  clearTimeout(autoT);
   let buf; try { buf = buildWorkbook(); } catch(err){ showMsg("Le fichier Excel n'a pas pu être généré : " + esc(err.message || err), "err", true); return; }
-  S.saving = true; $("#exportBtn").disabled = true;
+  const m0 = S.m, rev0 = S.rev || 0;
+  S.saving = true; renderHeaderState(); renderNav();
   try {
     const meta = await remoteMeta();
-    if (meta && meta.updated_at !== S.m.remoteAt && force !== true){
+    if (meta && meta.updated_at !== m0.remoteAt && !force){
+      S.conflict = true;
       const when = new Date(meta.updated_at).toLocaleString("fr-FR",{dateStyle:"short",timeStyle:"short"});
-      const m = showMsg(`Quelqu'un a enregistré une version plus récente (${esc(when)}). Si vous continuez, elle sera remplacée, mais restera dans l'historique. <button class="btn" id="conflictDl" type="button">Télécharger ma version</button><button class="btn primary" id="conflictSave" type="button">Remplacer quand même</button>`, "warn", true);
+      const m = showMsg(`Quelqu'un a enregistré une version plus récente (${esc(when)}). Vos modifications n'ont pas été envoyées. Si vous continuez, cette version sera remplacée, mais restera dans l'historique. <button class="btn" id="conflictDl" type="button">Télécharger ma version</button><button class="btn" id="conflictLoad" type="button">Abandonner et recharger</button><button class="btn primary" id="conflictSave" type="button">Remplacer quand même</button>`, "warn", true);
       m.querySelector("#conflictDl").onclick = downloadCopy;
-      m.querySelector("#conflictSave").onclick = () => { hideMsg(); doExport(true); };
+      m.querySelector("#conflictLoad").onclick = () => { hideMsg(); loadRemote(); };
+      m.querySelector("#conflictSave").onclick = () => { hideMsg(); doExport({ force:true }); };
       return;
     }
-    if (meta){
+    S.conflict = false;
+    if (meta && (!auto || Date.now() - (S.lastBackup || 0) > BACKUP_EVERY_MS)){
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const { error } = await bucket().copy(SB_FILE, `historique/base-${stamp}.xlsx`);
       if (error) throw error;
+      S.lastBackup = Date.now();
     }
     const { error } = await bucket().upload(SB_FILE, new Blob([buf], { type: XLSX_MIME }), { upsert:true, contentType: XLSX_MIME, cacheControl:"0" });
     if (error) throw error;
     const after = await remoteMeta();
-    S.m.remoteAt = after ? after.updated_at : null; S.m.dirty = false; persist(); renderNav();
-    showMsg("Données enregistrées en ligne.", "ok");
-  } catch(err){ remoteError(err, "L'enregistrement a échoué"); }
-  finally { S.saving = false; renderHeaderState(); }
+    m0.remoteAt = after ? after.updated_at : null;
+    /* Edits made during the upload are not in this file: stay dirty and save again */
+    if (S.m === m0 && (S.rev || 0) === rev0) m0.dirty = false; else scheduleAutosave();
+    persist();
+    if (!auto) showMsg("Données enregistrées en ligne.", "ok");
+  } catch(err){
+    if (isAuthErr(err)) remoteError(err, "");
+    else if (auto){ scheduleAutosave(RETRY_MS); showMsg(`Enregistrement automatique impossible (${esc(err?.message || "erreur réseau")}). Nouvel essai dans 30 secondes ; vos modifications restent sur ce navigateur.`, "warn"); }
+    else remoteError(err, "L'enregistrement a échoué");
+  }
+  finally { S.saving = false; renderHeaderState(); if (S.m) renderNav(); }
 }
 $("#exportBtn").addEventListener("click", () => doExport());
 
@@ -1327,7 +1359,7 @@ function renderNav(){
   const nb = $("#navbar");
   if (!S.m){ nb.innerHTML = ""; return; }
   const m = S.m;
-  const state = m.dirty ? `<span class="unsaved">● Modifications non enregistrées</span>` : (m.modifiedAt ? `<span class="saved">✓ Enregistré</span>` : "");
+  const state = S.saving ? `<span class="saved">Enregistrement…</span>` : S.conflict ? `<span class="unsaved">● Version plus récente en ligne : enregistrement automatique suspendu</span>` : m.dirty ? `<span class="unsaved">● Modifications non enregistrées</span>` : (m.modifiedAt ? `<span class="saved">✓ Enregistré</span>` : "");
   const src = `<div class="source">Base : <b>${esc(m.source)}</b> · ${plural(m.people.length,"commande")} ${state}</div>`;
   if (S.view === "fiche"){
     const p = person(S.sel); const prev = S.back[S.back.length-1];
