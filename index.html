@@ -501,6 +501,26 @@ function normMode(v){
   return clean(v);
 }
 /* Article cell in the Commandes sheet: a number (pieces without size) or sizes joined by " + " ("?" = size to specify) */
+/* Which sizes an article offers, from its name */
+function sizeRule(a){
+  const n = norm(a.name);
+  if (/trifonction/.test(n)){
+    const suffix = /courte/.test(n) ? " (sans manche)" : /longue/.test(n) ? " (avec manches)" : "";
+    return { groups:["Homme","Femme"], suffix, unique:false };
+  }
+  if (/\bfemme\b/.test(n)) return { groups:["Femme"], suffix:"", unique:false };
+  if (/\bhomme\b/.test(n)) return { groups:["Homme"], suffix:"", unique:false };
+  if (/\b(mixte|unisexe)\b/.test(n)) return { groups:["Unisexe"], suffix:"", unique:true };
+  return { groups:["Homme","Femme","Unisexe"], suffix:"", unique:true };
+}
+/* Trifonction sizes always carry the article's sleeve label: "Homme M" becomes "Homme M (avec manches)" */
+function canonSize(a, s){
+  const { suffix } = sizeRule(a); if (!suffix || !s) return s;
+  const m = clean(s).match(/^(homme|femme)\s+([a-z0-9]+)(?:\s*\(\s*(sans|avec)\s+manches?\s*\))?$/i);
+  if (!m) return s;
+  if (m[3] && !suffix.includes(m[3].toLowerCase())) return s;
+  return title(m[1]) + " " + m[2].toUpperCase() + suffix;
+}
 function parseCell(v){
   if (v == null || v === "") return [];
   if (typeof v === "number") return v > 0 ? Array(Math.round(v)).fill("") : [];
@@ -534,6 +554,7 @@ function migrate(m){
   m.imports = m.imports || [];
   if (m.nextTx == null){ let n = 1; m.people.forEach(p => { if (!p.tx){ p.tx = legacyTx(p); p.tx.forEach(t => t.id = n++); } }); m.nextTx = n; }
   m.people.forEach(p => { p.tx = p.tx || []; });
+  m.people.forEach(p => m.articles.forEach(x => { if (p.sizes[x.col]) p.sizes[x.col] = p.sizes[x.col].map(z => canonSize(x, z)); }));
   m.nextRef = Math.max(m.nextRef || 1, nextRefOf(m.people));
   return m;
 }
@@ -576,7 +597,7 @@ function legacyTx(p){
 }
 function fixSizes(p){
   S.m.articles.forEach(a => {
-    const q = p.qty[a.col] || 0; let arr = (p.sizes[a.col] || []).slice(0, q);
+    const q = p.qty[a.col] || 0; let arr = (p.sizes[a.col] || []).slice(0, q).map(z => canonSize(a, z));
     while (arr.length < q) arr.push("");
     if (q) p.sizes[a.col] = arr; else delete p.sizes[a.col];
   });
@@ -1129,7 +1150,8 @@ function matchArticle(header, fam){
   });
   return best;
 }
-function sizeLabel(a, value, gender){
+function sizeLabel(a, value, gender){ return canonSize(a, rawSizeLabel(a, value, gender)); }
+function rawSizeLabel(a, value, gender){
   const v = clean(value); if (!v || /^(oui|x|yes|1)$/i.test(v)) return noSize(a.name) ? "Taille unique" : "";
   if (noSize(a.name)) return "Taille unique";
   if (/^(homme|femme|unisexe)\b/i.test(v)) return title(v.split(" ")[0]) + " " + v.split(" ").slice(1).join(" ").toUpperCase();
@@ -1177,7 +1199,7 @@ function parseForm(rows, form){
     const items = [];
     if (form === "velo") map.forEach(({ ci, a }) => { const v = clean(r[ci]); if (!v || NO_VAL.test(v)) return; items.push({ col:a.col, art:a.name, size:sizeLabel(a, v) }); });
     else { const tv = clean(r[tri.tC]); if (tv){ const a = /longue/i.test(tv) ? tri.longue : tri.courte; const g = tri.gC >= 0 ? title(clean(r[tri.gC])) : ""; const sz = tri.sC >= 0 ? clean(r[tri.sC]) : "";
-      const variant = clean(tv.split(",").slice(1).join(",")); let size = sz ? (g || "Unisexe") + " " + normSize(sz) : ""; if (size && variant) size += " (" + variant.toLowerCase() + ")";
+      const variant = clean(tv.split(",").slice(1).join(",")); let size = sz ? (g || "Unisexe") + " " + normSize(sz) : ""; if (size && variant) size += " (" + variant.toLowerCase() + ")"; size = canonSize(a, size);
       items.push({ col:a.col, art:a.name, size }); } }
     const remarks = remCols.map(ci => [head[ci], clean(r[ci])]).filter(x => x[1]).map(([h, v]) => `${h.replace(/\s+/g," ").trim()} : ${v}`);
     out.push({ form, ts, email, name: title(name), formName: name, remarks, items, key: [form, ts, norm(email), norm(name)].join("|") });
@@ -1685,9 +1707,11 @@ function renderDashboard(v){
 
 /* ---------- view: fiche (editable) ---------- */
 function sizeSelect(a, i, val){
-  const opts = Object.entries(SIZE_GROUPS).map(([g, arr]) => `<optgroup label="${g}">${arr.map(z => { const v = g + " " + z; return `<option ${val===v?"selected":""}>${v}</option>`; }).join("")}</optgroup>`).join("");
-  const known = val && Object.entries(SIZE_GROUPS).some(([g,arr]) => arr.some(z => g + " " + z === val)) || val === "Taille unique";
-  return `<select id="sz-${a.col}-${i}" data-size="${a.col}" data-i="${i}" class="${val ? "" : "todo"}" aria-label="Taille ${i+1} ${esc(a.name)}"><option value="">Taille ?</option>${opts}<option ${val==="Taille unique"?"selected":""}>Taille unique</option>${val && !known ? `<option selected>${esc(val)}</option>` : ""}</select>`;
+  const { groups, suffix, unique } = sizeRule(a);
+  const opts = groups.map(g => `<optgroup label="${g}">${SIZE_GROUPS[g].map(z => { const v = g + " " + z + suffix; return `<option ${val===v?"selected":""}>${v}</option>`; }).join("")}</optgroup>`).join("");
+  const known = groups.some(g => SIZE_GROUPS[g].some(z => g + " " + z + suffix === val)) || (unique && val === "Taille unique");
+  /* A value outside the article's list stays visible so existing data is never hidden */
+  return `<select id="sz-${a.col}-${i}" data-size="${a.col}" data-i="${i}" class="${val ? "" : "todo"}" aria-label="Taille ${i+1} ${esc(a.name)}"><option value="">Taille ?</option>${opts}${unique ? `<option ${val==="Taille unique"?"selected":""}>Taille unique</option>` : ""}${val && !known ? `<option selected>${esc(val)}</option>` : ""}</select>`;
 }
 function relatedPeople(p){
   if (!p.note) return [];
