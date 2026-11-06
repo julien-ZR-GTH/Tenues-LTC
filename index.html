@@ -42,6 +42,28 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
 #loginForm input[type=password]{height:44px;border-radius:8px;border:1.5px solid var(--line);background:var(--surface);color:inherit;padding:0 12px;width:100%;font:inherit}
 #loginForm .btn{justify-content:center;height:44px}
 #loginErr{color:#b3261e;font-size:14px}
+.stkpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.stkpis div{background:var(--sunken);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.stkpis b{font-size:26px;line-height:1.1}
+.stkpis .neg b{color:var(--bad)} .stkpis .pos b{color:var(--good)}
+.sttable{overflow-x:auto}
+.sttable table{min-width:640px;font-size:13.5px}
+.sttable td.num,.sttable th.num{text-align:right;white-space:nowrap}
+.sttable .neg{color:var(--bad);font-weight:700} .sttable .pos{color:var(--good);font-weight:700}
+.sizechips span.ok{background:color-mix(in srgb,var(--good) 16%,transparent)}
+.sizechips span.miss{background:color-mix(in srgb,var(--bad) 14%,transparent)}
+.rcart{border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+.rcart summary{cursor:pointer;font-weight:700;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.rcart summary .sub{font-weight:400}
+.rcgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:10px}
+.rcgrid label{display:flex;flex-direction:column;gap:3px;font-size:12.5px}
+.rcgrid label em{font-style:normal;color:var(--muted);font-size:11.5px}
+.qtyin{height:36px;border-radius:7px;border:1.5px solid var(--line);background:var(--bg);color:inherit;padding:0 8px;width:100%;font:inherit;font-size:14px}
+.qtyin.chg{border-color:var(--accent);background:var(--accent-soft)}
+.sttable input.qtyin{width:80px;text-align:right}
+.stadd{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.stadd select{height:36px;border-radius:7px;border:1.5px solid var(--line);background:var(--surface);color:inherit;padding:0 6px;max-width:100%}
+@media (max-width:640px){.stkpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 #loginErr[hidden]{display:none}
 .btn.icon{padding-left:10px;padding-right:10px}
 </style>
@@ -423,6 +445,7 @@ details.ign summary{cursor:pointer;font-weight:600}
 
 <div class="overlay" id="qpOverlay" hidden><div class="modal" id="qpModal" style="max-width:640px" role="dialog" aria-modal="true" aria-labelledby="qpTitle"></div></div>
 <div class="overlay" id="shopOverlay" hidden><div class="modal" id="shopModal" style="max-width:560px" role="dialog" aria-modal="true" aria-labelledby="shopTitle"></div></div>
+<div class="overlay" id="stOverlay" hidden><div class="modal" id="stModal" style="max-width:800px" role="dialog" aria-modal="true" aria-labelledby="stTitle"></div></div>
 <div class="overlay" id="supOverlay" hidden><div class="modal" id="supModal" style="max-width:620px" role="dialog" aria-modal="true" aria-labelledby="supTitle"></div></div>
 
 <script>
@@ -551,7 +574,7 @@ function migrate(m){
   const L = m.layout;
   let i = Math.max(L.header.length, L.iForm + 1); PREP_COLS.forEach(([k, label]) => { if (L[k] == null){ L[k] = i; L.header[i++] = label; } });
   m.people.forEach(p => { p.prep = !!p.prep; p.ref = p.ref || ""; p.ret = !!p.ret; p.retDate = p.retDate || ""; p.retNote = p.retNote || ""; p.email = p.email || ""; p.origin = p.origin || ""; p.date = p.date || ""; p.conflict = !!p.conflict; });
-  m.imports = m.imports || [];
+  m.imports = m.imports || []; m.stock = m.stock || [];
   if (m.nextTx == null){ let n = 1; m.people.forEach(p => { if (!p.tx){ p.tx = legacyTx(p); p.tx.forEach(t => t.id = n++); } }); m.nextTx = n; }
   m.people.forEach(p => { p.tx = p.tx || []; });
   m.people.forEach(p => m.articles.forEach(x => { if (p.sizes[x.col]) p.sizes[x.col] = p.sizes[x.col].map(z => canonSize(x, z)); }));
@@ -691,7 +714,13 @@ function parseWorkbook(sheets){
   }
   const notesName = names.find(n => /^notes?$/i.test(n.trim())); const extra = [];
   if (notesName) for (const r of sheets[notesName] || []) { if (!r || !clean(r[0])) continue; const t = r.slice(1).map(clean).filter(Boolean).join(" — "); if (t) extra.push({ who: clean(r[0]), text: t }); }
-  const m = { layout: L, articles, people, fileNotes, extra, imports, nextTx: 1, nextUid: uid, nextRef: nextRefOf(people), source: "", origB64: null, loadedAt: null, modifiedAt: null, dirty: false };
+  const stock = [];
+  const stName = names.find(n => /^mouvements de stock$/i.test(n.trim()));
+  if (stName){ const sr = sheets[stName] || []; const sh = (sr[0] || []).map(norm); const c = re => sh.findIndex(h => re.test(h));
+    const cL = c(/^lot/), cD = c(/^date/), cT = c(/^type/), cA = c(/^article/), cS = c(/^taille/), cQ = c(/^quantit/), cN = c(/^note/);
+    for (let r = 1; r < sr.length; r++){ const row = sr[r] || []; const art = clean(row[cA]), qty = Math.round(toNum(row[cQ])); if (!art || !qty) continue;
+      stock.push({ lot: clean(row[cL]) || "L" + r, date: fmtDate(row[cD]), type: /ajust|invent/i.test(clean(row[cT])) ? "Ajustement" : "Réception", art, size: clean(row[cS]) || "À préciser", qty, note: clean(row[cN]) }); } }
+  const m = { layout: L, articles, people, fileNotes, extra, imports, stock, nextTx: 1, nextUid: uid, nextRef: nextRefOf(people), source: "", origB64: null, loadedAt: null, modifiedAt: null, dirty: false };
   ensureCap(m); S.m = m; people.forEach(fixSizes);
   if (!txName) people.forEach(p => { p.tx = legacyTx(p); p.tx.forEach(t => t.id = nextTx++); });
   m.nextTx = nextTx;
@@ -902,6 +931,14 @@ function buildWorkbook(){
   (m.imports || []).forEach(x => im.push([x.key, x.form, x.ts, x.email, x.name, x.who, x.at]));
   const wi = XLSX.utils.aoa_to_sheet(im); wi["!cols"] = [{wch:50},{wch:22},{wch:26},{wch:30},{wch:26},{wch:26},{wch:12}];
   setSheet(wb, "Imports Google", wi);
+  const sm = [["Lot","Date","Type","Article","Taille","Quantité","Note"]];
+  (m.stock || []).forEach(x => sm.push([x.lot, x.date, x.type, x.art, x.size, x.qty, x.note || null]));
+  const wsm = XLSX.utils.aoa_to_sheet(sm); wsm["!cols"] = [{wch:16},{wch:12},{wch:12},{wch:36},{wch:26},{wch:10},{wch:40}];
+  setSheet(wb, "Mouvements de stock", wsm);
+  const se = [["Article","Taille","Reçu","Ajusté","Livré","En stock","Réservé","Disponible"]];
+  stockData().rows.forEach(r => se.push([r.art, r.size, r.recv, r.adj, r.deliv, r.stock, r.resv, r.dispo]));
+  const wse = XLSX.utils.aoa_to_sheet(se); wse["!cols"] = [{wch:36},{wch:26},{wch:8},{wch:8},{wch:8},{wch:10},{wch:10},{wch:11}];
+  setSheet(wb, "État du stock", wse);
   const info = [["Suivi des tenues — Laval Triathlon Club"], [`Fichier enregistré le ${new Date().toLocaleString("fr-FR")} par l'outil de suivi v2.`], [],
     ["Pour reprendre le travail : ouvrir l'outil et se connecter ; la dernière version enregistrée se charge automatiquement."],
     ["Commandes : une ligne par adhérent. Dans chaque colonne article : la taille (ex. « Homme M »), plusieurs pièces séparées par « + » (ex. « Homme M + Femme S »), « ? » pour une taille inconnue, ou simplement le nombre de pièces."],
@@ -910,6 +947,8 @@ function buildWorkbook(){
     ["À commander : total par article et par taille, avec ce qui est déjà réglé."],
     ["Transactions : un paiement par ligne, avec les articles qu'il règle (« Article ×quantité » séparés par « ; »). Commande tenues = trifonctions + vélo ; Achats du jour = goodies, maillot course à pied…"],
     ["Imports Google : réponses de formulaires déjà importées (sert à éviter les doublons). Ne pas modifier."],
+    ["Mouvements de stock : réceptions de commande et ajustements, une ligne par article et par taille. C'est la source du stock : ne pas modifier à la main."],
+    ["État du stock : recalculé à chaque enregistrement. En stock = reçu + ajusté − livré (commandes retirées) ; Disponible = en stock − réservé (commandes pas encore retirées)."],
     ["Vous pouvez corriger les valeurs à la main dans Excel ; gardez les en-têtes et l'ordre des colonnes."]];
   const wl = XLSX.utils.aoa_to_sheet(info); wl["!cols"] = [{wch:110}]; setSheet(wb, "À lire", wl);
   return forceRecalc(XLSX.write(wb, { bookType:"xlsx", type:"array" }));
@@ -1118,6 +1157,128 @@ $("#qpOverlay").addEventListener("keydown", e => { if (e.key === "Escape") close
 $("#shopOverlay").addEventListener("keydown", e => { if (e.key === "Escape") closeShop(); });
 $("#supOverlay").addEventListener("keydown", e => { if (e.key === "Escape") closeSupplier(); });
 document.addEventListener("click", e => { if (e.target.closest("[data-supplier]")) openSupplier(); });
+/* ---------- stock ---------- */
+const stockArts = () => S.m.articles.filter(a => SUPPLIER_FAMS.includes(a.fam));
+const sizeKey = (a, s) => noSize(a.name) ? "Taille unique" : (s || "À préciser");
+function sizesFor(a){
+  if (noSize(a.name)) return ["Taille unique"];
+  const { groups, suffix, unique } = sizeRule(a);
+  return [...groups.flatMap(g => SIZE_GROUPS[g].map(z => g + " " + z + suffix)), ...(unique ? ["Taille unique"] : [])];
+}
+/* En stock = reçu + ajusté − livré ; réservé = commandé mais pas encore retiré ; disponible = en stock − réservé */
+function stockData(){
+  const arts = stockArts(), byName = new Map(arts.map(a => [norm(a.name), a])), map = new Map();
+  const row = (a, art, size) => { const k = norm(art) + "|" + size; if (!map.has(k)) map.set(k, { a, art, size, recv:0, adj:0, deliv:0, resv:0 }); return map.get(k); };
+  (S.m.stock || []).forEach(e => { const a = byName.get(norm(e.art)); const r = row(a, a ? a.name : e.art, e.size); if (e.type === "Ajustement") r.adj += e.qty; else r.recv += e.qty; });
+  S.m.people.forEach(p => arts.forEach(a => { const q = p.qty[a.col] || 0; if (!q) return;
+    const arr = (p.sizes[a.col] || []).slice(0, q); while (arr.length < q) arr.push("");
+    arr.forEach(s => { const r = row(a, a.name, sizeKey(a, s)); if (p.ret) r.deliv++; else r.resv++; }); }));
+  const order = new Map(arts.map((a, i) => [norm(a.name), i]));
+  const rows = [...map.values()].map(r => ({ ...r, stock: r.recv + r.adj - r.deliv, dispo: r.recv + r.adj - r.deliv - r.resv }))
+    .sort((x, y) => ((order.get(norm(x.art)) ?? 99) - (order.get(norm(y.art)) ?? 99)) || (sizeOrder(x.size) - sizeOrder(y.size)));
+  return { rows, has: (S.m.stock || []).length > 0 };
+}
+const lotId = () => "L" + new Date().toISOString().replace(/\D/g, "").slice(0, 14) + "-" + Math.random().toString(36).slice(2, 6);
+function closeStock(){ $("#stOverlay").hidden = true; }
+$("#stOverlay").addEventListener("click", e => { if (e.target.id === "stOverlay") closeStock(); });
+$("#stOverlay").addEventListener("keydown", e => { if (e.key === "Escape") closeStock(); });
+document.addEventListener("click", e => { if (e.target.closest("[data-reception]")) openReception(); else if (e.target.closest("[data-stockmgmt]")) openStockMgmt(); });
+
+function openReception(){
+  if (!S.m) return;
+  const d = stockData(), byKey = new Map(d.rows.map(r => [norm(r.art) + "|" + r.size, r]));
+  const box = $("#stModal");
+  const arts = stockArts().map(a => {
+    const sizes = [...new Set([...sizesFor(a), ...d.rows.filter(r => r.a === a && r.size !== "À préciser").map(r => r.size)])].sort((x, y) => sizeOrder(x) - sizeOrder(y));
+    const resv = d.rows.filter(r => r.a === a).reduce((t, r) => t + r.resv, 0);
+    return { a, sizes, resv };
+  });
+  box.innerHTML = `<h2 id="stTitle">Réception de commande</h2>
+    <p class="sub" style="margin:0">Saisissez le nombre de pièces reçues pour chaque article et chaque taille. Le stock et les disponibilités se mettent à jour dès la validation.</p>
+    <div class="stadd"><label class="lbl" for="rcDate">Date de réception</label><input type="date" id="rcDate" class="qtyin" style="width:auto" value="${todayISO()}">
+      <button type="button" class="btn" id="rcFill" title="Remplit chaque taille avec ce qui manque pour couvrir les commandes pas encore retirées">Pré-remplir avec les pièces manquantes</button></div>
+    <input type="text" id="rcNote" style="flex:none" placeholder="Note (facultatif), ex. bon de livraison n°…" aria-label="Note de réception">
+    ${arts.map(({ a, sizes, resv }) => `<details class="rcart" ${resv ? "open" : ""}><summary><span class="fam ${a.fam}"></span>${esc(a.name)} <span class="sub">${resv ? plural(resv, "pièce") + " réservée" + (resv > 1 ? "s" : "") : "aucune commande en attente"}</span> <span class="sub" data-rcsum="${a.col}"></span></summary>
+      <div class="rcgrid">${sizes.map(sz => { const r = byKey.get(norm(a.name) + "|" + sz); const need = r ? Math.max(0, -r.dispo) : 0;
+        return `<label>${esc(sz)}<input type="number" min="0" step="1" inputmode="numeric" class="qtyin" data-rc="${a.col}" data-sz="${esc(sz)}" data-need="${need}" placeholder="0"><em>${r ? `stock ${r.stock} · réservé ${r.resv}` : "&nbsp;"}</em></label>`; }).join("")}</div></details>`).join("")}
+    <div class="row" style="justify-content:flex-end"><span class="sub" id="rcTotal"></span><button type="button" class="btn" id="rcCancel">Annuler</button><button type="button" class="btn primary" id="rcGo" disabled>Valider la réception</button></div>`;
+  $("#stOverlay").hidden = false;
+  const ins = [...box.querySelectorAll("[data-rc]")];
+  const upd = () => {
+    let tot = 0; const per = {};
+    ins.forEach(i => { const n = Math.max(0, Math.round(+i.value || 0)); i.classList.toggle("chg", n > 0); tot += n; per[i.dataset.rc] = (per[i.dataset.rc] || 0) + n; });
+    box.querySelectorAll("[data-rcsum]").forEach(el => { const n = per[el.dataset.rcsum] || 0; el.textContent = n ? "· " + plural(n, "pièce") + " reçue" + (n > 1 ? "s" : "") : ""; });
+    $("#rcTotal").textContent = tot ? plural(tot, "pièce") + " au total" : ""; $("#rcGo").disabled = !tot;
+  };
+  ins.forEach(i => i.oninput = upd);
+  $("#rcFill").onclick = () => { ins.forEach(i => { const n = +i.dataset.need; i.value = n ? n : ""; if (n) i.closest("details").open = true; }); upd(); };
+  $("#rcCancel").onclick = closeStock;
+  $("#rcGo").onclick = () => {
+    const date = isoToFr($("#rcDate").value) || new Date().toLocaleDateString("fr-FR"), note = clean($("#rcNote").value), lot = lotId();
+    const arts = new Map(stockArts().map(a => [String(a.col), a])); let tot = 0;
+    ins.forEach(i => { const n = Math.max(0, Math.round(+i.value || 0)); if (!n) return; tot += n;
+      S.m.stock.push({ lot, date, type:"Réception", art: arts.get(i.dataset.rc).name, size: i.dataset.sz, qty: n, note }); });
+    if (!tot) return;
+    closeStock(); touch(); render(); showMsg(`Réception du ${esc(date)} enregistrée : ${plural(tot, "pièce")}.`, "ok");
+  };
+  upd(); setTimeout(() => box.querySelector("[data-rc]")?.focus(), 0);
+}
+
+function openStockMgmt(extra, keep){
+  if (!S.m) return;
+  const d = stockData(), rows = d.rows.slice(); (extra || []).forEach(x => { if (!rows.some(r => norm(r.art) === norm(x.art) && r.size === x.size)) rows.push({ ...x, recv:0, adj:0, deliv:0, resv:0, stock:0, dispo:0 }); });
+  const lots = [...new Map((S.m.stock || []).map(e => [e.lot, e])).values()].map(e => { const es = S.m.stock.filter(x => x.lot === e.lot); return { lot:e.lot, date:e.date, type:e.type, note:e.note, n: es.reduce((t, x) => t + x.qty, 0), lines: es.length }; }).reverse();
+  const box = $("#stModal"), arts = stockArts();
+  box.innerHTML = `<h2 id="stTitle">Gestion des stocks</h2>
+    <p class="sub" style="margin:0">Corrigez la colonne « En stock » après un inventaire : la différence est enregistrée comme un ajustement daté. Réservé = commandé mais pas encore retiré ; disponible = en stock − réservé.</p>
+    <div class="sttable"><table><thead><tr><th>Article</th><th>Taille</th><th class="num">Reçu</th><th class="num">Ajusté</th><th class="num">Livré</th><th class="num">En stock</th><th class="num">Réservé</th><th class="num">Disponible</th></tr></thead><tbody>
+      ${rows.map((r, i) => `<tr><td><span class="fam ${r.a ? r.a.fam : ""}"></span> ${esc(r.art)}</td><td>${esc(r.size)}</td><td class="num">${r.recv}</td><td class="num">${r.adj > 0 ? "+" : ""}${r.adj || ""}</td><td class="num">${r.deliv}</td>
+        <td class="num">${r.size === "À préciser" ? r.stock : `<input type="number" step="1" inputmode="numeric" class="qtyin" data-st="${i}" value="${r.stock}" aria-label="En stock ${esc(r.art)} ${esc(r.size)}">`}</td>
+        <td class="num">${r.resv}</td><td class="num ${r.dispo < 0 ? "neg" : r.dispo > 0 ? "pos" : ""}" data-dispo="${i}">${r.dispo}</td></tr>`).join("") || `<tr><td colspan="8" class="sub">Aucun article en stock ni commandé.</td></tr>`}
+    </tbody></table></div>
+    <div class="stadd"><span class="lbl">Ajouter une ligne</span><select id="stArt" aria-label="Article">${arts.map(a => `<option value="${a.col}">${esc(a.name)}</option>`).join("")}</select><select id="stSize" aria-label="Taille"></select><button type="button" class="btn" id="stAdd">Ajouter</button></div>
+    ${lots.length ? `<details class="rcart"><summary>Historique <span class="sub">${plural(lots.length, "mouvement")}</span></summary><div class="sttable"><table style="min-width:520px"><tbody>
+      ${lots.map(l => `<tr><td>${esc(l.date)}</td><td>${esc(l.type)}</td><td class="num">${l.n > 0 ? "+" : ""}${l.n} pièce${Math.abs(l.n) > 1 ? "s" : ""}</td><td class="sub">${esc(l.note || "")}</td><td class="num"><button type="button" class="btn danger" style="height:32px" data-dellot="${esc(l.lot)}">Supprimer</button></td></tr>`).join("")}
+    </tbody></table></div></details>` : ""}
+    <div class="row" style="justify-content:flex-end"><button type="button" class="btn" id="stCancel">Fermer</button><button type="button" class="btn primary" id="stGo" disabled>Enregistrer les ajustements</button></div>`;
+  $("#stOverlay").hidden = false;
+  const fillSizes = () => { const a = arts.find(x => String(x.col) === $("#stArt").value); $("#stSize").innerHTML = a ? sizesFor(a).map(z => `<option>${esc(z)}</option>`).join("") : ""; };
+  if ($("#stArt")) { $("#stArt").onchange = fillSizes; fillSizes(); }
+  $("#stAdd").onclick = () => { const a = arts.find(x => String(x.col) === $("#stArt").value); if (!a) return; openStockMgmt([...(extra || []), { a, art: a.name, size: $("#stSize").value }], changes()); };
+  const inputs = () => [...box.querySelectorAll("[data-st]")];
+  const changes = () => inputs().map(i => [i.dataset.st, i.value]);
+  const upd = () => { let n = 0; inputs().forEach(i => { const r = rows[+i.dataset.st], v = Math.round(+i.value); const ch = i.value !== "" && v !== r.stock; i.classList.toggle("chg", ch); if (ch) n++;
+      const cell = box.querySelector(`[data-dispo="${i.dataset.st}"]`), dv = (i.value === "" ? r.stock : v) - r.resv; cell.textContent = dv; cell.className = "num " + (dv < 0 ? "neg" : dv > 0 ? "pos" : ""); });
+    $("#stGo").disabled = !n; $("#stGo").textContent = n ? `Enregistrer ${plural(n, "ajustement")}` : "Enregistrer les ajustements"; };
+  inputs().forEach(i => i.oninput = upd);
+  (keep || []).forEach(([k, v]) => { const i = box.querySelector(`[data-st="${k}"]`); if (i) i.value = v; }); upd();
+  box.querySelectorAll("[data-dellot]").forEach(b => b.onclick = () => {
+    if (!b.classList.contains("armed")){ b.classList.add("armed"); b.textContent = "Confirmer ?"; return; }
+    S.m.stock = S.m.stock.filter(x => x.lot !== b.dataset.dellot); touch(); render(); openStockMgmt(extra); showMsg("Mouvement supprimé.", "ok"); });
+  $("#stCancel").onclick = closeStock;
+  $("#stGo").onclick = () => {
+    const date = new Date().toLocaleDateString("fr-FR"), lot = lotId(); let n = 0;
+    inputs().forEach(i => { const r = rows[+i.dataset.st], v = Math.round(+i.value); if (i.value === "" || v === r.stock) return; n++;
+      S.m.stock.push({ lot, date, type:"Ajustement", art: r.art, size: r.size, qty: v - r.stock, note:"Inventaire" }); });
+    if (!n) return; closeStock(); touch(); render(); showMsg(`${plural(n, "ajustement")} de stock enregistré${n > 1 ? "s" : ""}.`, "ok");
+  };
+}
+function stockPanel(fam){
+  const d = stockData(), rows = d.rows.filter(r => fam === "all" || (r.a && r.a.fam === fam));
+  const sum = k => rows.reduce((t, r) => t + r[k], 0);
+  const free = rows.reduce((t, r) => t + Math.max(0, r.dispo), 0), miss = rows.reduce((t, r) => t + Math.max(0, -r.dispo), 0);
+  const byArt = []; rows.forEach(r => { let g = byArt.find(x => x.art === r.art); if (!g) byArt.push(g = { art:r.art, a:r.a, rows:[] }); g.rows.push(r); });
+  const chips = (list, cls, f) => list.length ? `<div class="sizechips">${list.map(r => `<span class="${cls}">${esc(r.size)} ${f(r)}</span>`).join("")}</div>` : "";
+  return `<div class="panel"><div class="tablehead"><div><h3 style="margin:0">Stock</h3><span class="sub">Réservé = commandé mais pas encore retiré · toutes catégories confondues</span></div>
+      <div class="row"><button type="button" class="btn primary" data-reception><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5"/><path d="M12 13v8"/></svg>Réception de commande</button><button type="button" class="btn" data-stockmgmt>Gestion des stocks</button></div></div>
+    <div class="stkpis"><div><span class="sub">En stock</span><b>${sum("stock")}</b></div><div><span class="sub">Réservées</span><b>${sum("resv")}</b></div><div class="pos"><span class="sub">Disponibles</span><b>${free}</b></div><div class="${miss ? "neg" : ""}"><span class="sub">Manquantes</span><b>${miss}</b></div></div>
+    ${!d.has ? `<span class="sub">Aucune réception enregistrée : les pièces réservées apparaissent comme manquantes. Cliquez sur « Réception de commande » à l'arrivée du colis.</span>` : ""}
+    ${byArt.length ? `<div class="sttable"><table><thead><tr><th>Article</th><th class="num">En stock</th><th class="num">Réservées</th><th class="num">Disponibles</th><th>Détail</th></tr></thead><tbody>
+      ${byArt.map(g => { const st = g.rows.reduce((t, r) => t + r.stock, 0), rs = g.rows.reduce((t, r) => t + r.resv, 0), dp = st - rs;
+        return `<tr><td><span class="fam ${g.a ? g.a.fam : ""}"></span> ${esc(g.art)}</td><td class="num">${st}</td><td class="num">${rs}</td><td class="num ${dp < 0 ? "neg" : dp > 0 ? "pos" : ""}">${dp}</td>
+          <td>${chips(g.rows.filter(r => r.dispo > 0), "ok", r => "× " + r.dispo)}${chips(g.rows.filter(r => r.dispo < 0), "miss", r => ": manque " + (-r.dispo))}</td></tr>`; }).join("")}
+    </tbody></table></div>` : `<span class="sub">Aucun article commandé ni reçu.</span>`}</div>`;
+}
 const SUP_BTN = `<button type="button" class="btn primary" data-supplier><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h13v10H3z"/><path d="M16 10h4l1 3v4h-5"/><circle cx="7" cy="18" r="1.6"/><circle cx="18" cy="18" r="1.6"/></svg>Export fournisseur</button>`;
 
 /* ---------- import Google Forms (CSV) ---------- */
@@ -1700,7 +1861,8 @@ function renderDashboard(v){
       <div class="panel"><div class="row"><h3>Quantités par article</h3>${KEYS}</div>${st.length ? stackBars(st.sort((a,b)=>b.q-a.q)) : `<span class="sub">Aucun article.</span>`}</div>
       <div class="panel"><h3>Montant par article</h3>${st.length ? simpleBars(st.slice().sort((a,b)=>b.amt-a.amt).map(x=>({k:x.name,v:x.amt,c:`var(--${x.fam})`})), fmtEur) : `<span class="sub">Aucun montant.</span>`}</div>
     </div>
-    <div class="panel"><div class="row"><h3>Tailles demandées</h3><span class="sub">Hors articles en taille unique · détail par article dans « À commander »</span></div>${sizeRows.length ? simpleBars(sizeRows, fmtInt) : `<span class="sub">Aucune taille saisie pour l'instant. Renseignez-les dans les fiches adhérents (ou via l'import Google Form à venir).</span>`}</div>`;
+    <div class="panel"><div class="row"><h3>Tailles demandées</h3><span class="sub">Hors articles en taille unique · détail par article dans « À commander »</span></div>${sizeRows.length ? simpleBars(sizeRows, fmtInt) : `<span class="sub">Aucune taille saisie pour l'instant. Renseignez-les dans les fiches adhérents (ou via l'import Google Form à venir).</span>`}</div>
+    ${stockPanel(fam)}`;
   v.querySelectorAll("[data-df]").forEach(b => b.onclick = () => { S.dashFam = b.dataset.df; render(); });
   $("#dcat").onchange = e => { S.dashCat = e.target.value; render(); };
 }
@@ -2008,7 +2170,7 @@ qEl.addEventListener("keydown", e => {
   else if (e.key === "Escape"){ sugEl.hidden = true; }
 });
 document.addEventListener("keydown", e => {
-  if (e.key !== "Escape" || !$("#overlay").hidden || !$("#supOverlay").hidden || !$("#shopOverlay").hidden || !$("#qpOverlay").hidden || S.view !== "fiche") return;
+  if (e.key !== "Escape" || !$("#overlay").hidden || !$("#supOverlay").hidden || !$("#stOverlay").hidden || !$("#shopOverlay").hidden || !$("#qpOverlay").hidden || S.view !== "fiche") return;
   const t = document.activeElement?.tagName; if (t === "TEXTAREA" || t === "INPUT" || t === "SELECT") return;
   goBack();
 });
