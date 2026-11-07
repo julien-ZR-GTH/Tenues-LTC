@@ -216,6 +216,11 @@ main .wrap{padding-block:20px 56px}
 .attn{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
 .conflictbox{display:flex;gap:10px;align-items:center;border:2px dashed var(--line);border-radius:8px;padding:10px 12px;cursor:pointer;font-weight:700}
 .conflictbox input{width:20px;height:20px;accent-color:var(--bad)}
+.d2box{display:inline-flex;gap:8px;align-items:center;border:2px dashed var(--line);border-radius:999px;padding:0 14px;height:40px;cursor:pointer;font-weight:700;margin-left:6px}
+.d2box input{width:18px;height:18px;accent-color:var(--c2)}
+.d2box.on{border:2px solid var(--c2);background:color-mix(in srgb,var(--c2) 14%,transparent)}
+.badge.d2{background:color-mix(in srgb,var(--c2) 16%,transparent);color:var(--ink);border:2px solid var(--c2)}
+.pstate.d2{background:color-mix(in srgb,var(--c2) 16%,transparent);color:var(--ink)}
 .conflictbox.on{border:2px solid var(--bad);background:var(--bad-soft);color:var(--bad)}
 .badge.conflict{background:var(--bad-soft);color:var(--bad);border:2px solid var(--bad)}
 @media (max-width:1100px){.attn{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -452,8 +457,8 @@ details.ign summary{cursor:pointer;font-weight:600}
 const CATALOG = {"header": ["Nom et prénom", "Categorie", "Maillot vélo manches courtes (unisexe)", "Veste vélo hiver femme", "Veste vélo hiver homme", "Veste vélo mi-saison (mixte)", "Cuissard court femme", "Cuissard court homme", "Chasuble (mixte)", "Trifonction courte distance", "Trifonction longue distance", "Maillot course à pied manches courtes", "Porte-dossard", "Chaussettes", "Casquette", "bandeau", "flasque", "T Shirt CAP : commande homme", "T Shirt CAP : commande femme", "Réglé ?", "Mode de règlement", "Heure transaction", "TOTAL (€)", "Notes", "Formaulaire google correspond"], "price": ["Prix unitaire (€)", null, 60, 95, 95, 95, 75, 75, 55, 100, 120, 34, null, 18, 18, 5, 4, 34, 34, null, null, null, null, null, "Non"]};
 const DEFAULT_NAME = "Suivi commandes Laval Triathlon.xlsx";
 const STORE_KEY = "ltc-tenues-v11";
-const PREP_COLS = [["iPrep","Préparée"],["iRef","Réf. sac"],["iRet","Retirée"],["iRetDate","Date retrait"],["iRetNote","Note retrait"],["iEmail","E-mail"],["iOrigin","Origine"],["iConflict","Conflit à revérifier"]];
-const COL_RE = { iPrep:/^preparee/, iRef:/^ref\.? ?sac|^reference sac/, iRet:/^retiree/, iRetDate:/^date retrait/, iRetNote:/^note retrait/, iEmail:/^e-?mail\b|^adresse e-?mail/, iOrigin:/^origine/, iConflict:/^conflit/ };
+const PREP_COLS = [["iPrep","Préparée"],["iRef","Réf. sac"],["iRet","Retirée"],["iRetDate","Date retrait"],["iRetNote","Note retrait"],["iEmail","E-mail"],["iOrigin","Origine"],["iConflict","Conflit à revérifier"],["iD2","Pack D2"]];
+const COL_RE = { iPrep:/^preparee/, iRef:/^ref\.? ?sac|^reference sac/, iRet:/^retiree/, iRetDate:/^date retrait/, iRetNote:/^note retrait/, iEmail:/^e-?mail\b|^adresse e-?mail/, iOrigin:/^origine/, iConflict:/^conflit/, iD2:/^pack ?d2/ };
 const FAMS = { tri:{ label:"Trifonctions" }, velo:{ label:"Tenue vélo" }, cap:{ label:"T Shirt CAP : commande" }, autre:{ label:"Boutique" } };
 const FAM_ORDER = ["tri","velo","cap","autre"];
 const SIZE_LIST = ["XXS","XS","S","M","L","XL","XXL","3XL","4XL","5XL"];
@@ -573,7 +578,7 @@ const nextRefOf = people => 1 + Math.max(0, ...people.map(p => refNum(p.ref)));
 function migrate(m){
   const L = m.layout;
   let i = Math.max(L.header.length, L.iForm + 1); PREP_COLS.forEach(([k, label]) => { if (L[k] == null){ L[k] = i; L.header[i++] = label; } });
-  m.people.forEach(p => { p.prep = !!p.prep; p.ref = p.ref || ""; p.ret = !!p.ret; p.retDate = p.retDate || ""; p.retNote = p.retNote || ""; p.email = p.email || ""; p.origin = p.origin || ""; p.date = p.date || ""; p.conflict = !!p.conflict; });
+  m.people.forEach(p => { p.prep = !!p.prep; p.ref = p.ref || ""; p.ret = !!p.ret; p.retDate = p.retDate || ""; p.retNote = p.retNote || ""; p.email = p.email || ""; p.origin = p.origin || ""; p.date = p.date || ""; p.conflict = !!p.conflict; p.d2 = !!p.d2; });
   m.imports = m.imports || []; m.stock = m.stock || [];
   if (m.nextTx == null){ let n = 1; m.people.forEach(p => { if (!p.tx){ p.tx = legacyTx(p); p.tx.forEach(t => t.id = n++); } }); m.nextTx = n; }
   m.people.forEach(p => { p.tx = p.tx || []; });
@@ -594,8 +599,18 @@ document.addEventListener("change", e => { if (e.target && e.target.id === "exCa
 /* ---------- model ---------- */
 /* pieces of an article covered by the person's payments */
 function paidN(p, col){ const q = p.qty[col] || 0; let n = 0; (p.tx || []).forEach(t => n += +(t.items[col] || 0)); return Math.min(q, n); }
+/* Pack D2: the club pays 50 % of one cycling jacket and one running top per member */
+const D2_RATE = 0.5;
+const D2_GROUPS = [{ key:"veste", label:"Veste vélo (hiver ou mi-saison)", re:/^veste velo/ }, { key:"cap", label:"Maillot / T Shirt course à pied", re:/^maillot course a pied|^t shirt cap/ }];
+function d2Disc(p){
+  const out = {}; if (!p.d2) return out;
+  D2_GROUPS.forEach(g => { const a = S.m.articles.find(x => g.re.test(norm(x.name)) && (p.qty[x.col] || 0) > 0 && x.price > 0); if (a) out[a.col] = Math.round(a.price * D2_RATE * 100) / 100; });
+  return out;
+}
+/* Amount for the first n pieces of an article: the discounted piece is always the first one */
+const subFor = (p, a, n, disc) => n > 0 ? n * a.price - ((disc || d2Disc(p))[a.col] || 0) : 0;
 function calc(p, ex){
-  const all = S.m.articles.map(a => { const q = p.qty[a.col] || 0; if (!(q > 0)) return null; const pn = paidN(p, a.col); return { ...a, q, pn, sub: q * a.price, paidSub: pn * a.price }; }).filter(Boolean);
+  const disc = d2Disc(p); const all = S.m.articles.map(a => { const q = p.qty[a.col] || 0; if (!(q > 0)) return null; const pn = paidN(p, a.col); return { ...a, q, pn, sub: subFor(p, a, q, disc), paidSub: subFor(p, a, pn, disc), d2: disc[a.col] || 0 }; }).filter(Boolean);
   const items = ex ? all.filter(i => i.fam !== "cap") : all; /* ex : les T Shirt CAP ne comptent pas dans les paiements */
   const total = items.reduce((s,x)=>s+x.sub,0), paidAmt = items.reduce((s,x)=>s+x.paidSub,0);
   const qty = items.reduce((s,x)=>s+x.q,0), pq = items.reduce((s,x)=>s+x.pn,0);
@@ -673,7 +688,7 @@ function parseWorkbook(sheets){
       note: String(row[L.iNotes] ?? "").trim(), form: clean(row[L.iForm]), cells: row.slice(),
       prep: norm(row[L.iPrep]).startsWith("oui"), ref: clean(row[L.iRef]).toUpperCase(), ret: norm(row[L.iRet]).startsWith("oui"),
       retDate: fmtDate(row[L.iRetDate]), retNote: String(row[L.iRetNote] ?? "").trim(),
-      email: clean(row[L.iEmail]), origin: clean(row[L.iOrigin]), conflict: norm(row[L.iConflict]).startsWith("oui") });
+      email: clean(row[L.iEmail]), origin: clean(row[L.iOrigin]), conflict: norm(row[L.iConflict]).startsWith("oui"), d2: norm(row[L.iD2]).startsWith("oui") });
   }
   // Tailles sheet (written by this app's export, or later by a Google Form import)
   const tName = names.find(n => /^tailles?$/i.test(n.trim()));
@@ -878,7 +893,7 @@ function buildWorkbook(){
     const cst = calc(p).st;
     row[L.iPaid] = { paid:"Oui", partial:"Partiel", unpaid:"Non", unknown:null }[cst]; row[L.iMode] = txModes(p).join(" + ") || null; row[L.iTime] = txLast(p) || null;
     row[L.iTotal] = null; row[L.iNotes] = p.note || null; row[L.iForm] = p.form || null;
-    const hc = hasCmd(p); row[L.iPrep] = hc ? (p.prep ? "Oui" : "Non") : null; row[L.iRef] = p.ref || null; row[L.iRet] = hc ? (p.ret ? "Oui" : "Non") : null; row[L.iRetDate] = p.retDate || null; row[L.iRetNote] = p.retNote || null; row[L.iEmail] = p.email || null; row[L.iOrigin] = p.origin || null; row[L.iConflict] = p.conflict ? "Oui" : null;
+    const hc = hasCmd(p); row[L.iPrep] = hc ? (p.prep ? "Oui" : "Non") : null; row[L.iRef] = p.ref || null; row[L.iRet] = hc ? (p.ret ? "Oui" : "Non") : null; row[L.iRetDate] = p.retDate || null; row[L.iRetNote] = p.retNote || null; row[L.iEmail] = p.email || null; row[L.iOrigin] = p.origin || null; row[L.iConflict] = p.conflict ? "Oui" : null; row[L.iD2] = p.d2 ? "Oui" : null;
     aoa.push(row);
   });
   if (m.fileNotes.length){ aoa.push(pad([])); m.fileNotes.forEach(r => aoa.push(pad(r))); }
@@ -886,7 +901,7 @@ function buildWorkbook(){
   const fa = colL(m.articles[0]?.col ?? 2), la = colL(m.articles[m.articles.length-1]?.col ?? 16);
   people.forEach((p, i) => {
     const r = first + i, rn = r + 1;
-    ws[XLSX.utils.encode_cell({ r, c: L.iTotal })] = { t:"n", v: calc(p).total, f: (() => { const rr = `${fa}${rn}:${la}${rn}`, pr = `$${fa}$${priceRowNum}:$${la}$${priceRowNum}`; return `IF(COUNTA(A${rn}:${la}${rn})=0,"",SUMPRODUCT(${rr},${pr})+SUMPRODUCT(${txtPieces(rr)},${pr}))`; })() };
+    ws[XLSX.utils.encode_cell({ r, c: L.iTotal })] = { t:"n", v: calc(p).total, f: (() => { const rr = `${fa}${rn}:${la}${rn}`, pr = `$${fa}$${priceRowNum}:$${la}$${priceRowNum}`; const d2 = Object.values(d2Disc(p)).reduce((t, x) => t + x, 0); return `IF(COUNTA(A${rn}:${la}${rn})=0,"",SUMPRODUCT(${rr},${pr})+SUMPRODUCT(${txtPieces(rr)},${pr})${d2 ? "-" + d2 : ""})`; })() };
     const lt = lastTx(p), dc = lt ? dtCell(lt.date, lt.time) : null;
     if (dc) ws[XLSX.utils.encode_cell({ r, c: L.iTime })] = dc;
   });
@@ -911,7 +926,7 @@ function buildWorkbook(){
   setSheet(wb, "À commander", wo);
   const bq = [["Adhérent","Article","Quantité","Prix unitaire (€)","Montant (€)","Pièces payées","Mode","Date"]];
   people.forEach(p => m.articles.filter(a => a.fam === "autre").forEach(a => { const q = p.qty[a.col] || 0; if (!q) return; const lt = lastDayTx(p);
-    bq.push([p.name, a.name, q, a.price || null, q * a.price, paidN(p, a.col), lt ? lt.mode || null : null, lt ? [lt.date, lt.time].filter(Boolean).join(" ") || null : null]); }));
+    bq.push([p.name, a.name, q, a.price || null, subFor(p, a, q), paidN(p, a.col), lt ? lt.mode || null : null, lt ? [lt.date, lt.time].filter(Boolean).join(" ") || null : null]); }));
   const wbq = XLSX.utils.aoa_to_sheet(bq); wbq["!cols"] = [{wch:26},{wch:36},{wch:9},{wch:15},{wch:11},{wch:13},{wch:15},{wch:16}];
   setSheet(wb, "Boutique", wbq);
   setSheet(wb, wb.SheetNames.find(n => /^synth/i.test(n)) || "Synthèse", synthSheet(first));
@@ -947,6 +962,7 @@ function buildWorkbook(){
     ["À commander : total par article et par taille, avec ce qui est déjà réglé."],
     ["Transactions : un paiement par ligne, avec les articles qu'il règle (« Article ×quantité » séparés par « ; »). Commande tenues = trifonctions + vélo ; Achats du jour = goodies, maillot course à pied…"],
     ["Imports Google : réponses de formulaires déjà importées (sert à éviter les doublons). Ne pas modifier."],
+    ["Pack D2 (colonne « Pack D2 » = Oui) : le club prend en charge 50 % d'une veste vélo et d'un maillot ou T Shirt course à pied ; le TOTAL de la ligne en tient compte."],
     ["Mouvements de stock : réceptions de commande et ajustements, une ligne par article et par taille. C'est la source du stock : ne pas modifier à la main."],
     ["État du stock : recalculé à chaque enregistrement. En stock = reçu + ajusté − livré (commandes retirées) ; Disponible = en stock − réservé (commandes pas encore retirées)."],
     ["Vous pouvez corriger les valeurs à la main dans Excel ; gardez les en-têtes et l'ordre des colonnes."]];
@@ -1087,8 +1103,8 @@ function agg(list, ex){
 }
 function articleStats(list, fam){
   return S.m.articles.filter(a => !fam || fam === "all" || a.fam === fam).map(a => {
-    const s = { ...a, q:0, paid:0, unpaid:0, unknown:0, amt:0 };
-    list.forEach(p => { const q = p.qty[a.col] || 0; if (!q) return; const pn = paidN(p, a.col); s.q += q; s.paid += pn; s[statusOf(p) === "unknown" ? "unknown" : "unpaid"] += q - pn; s.amt += q * a.price; });
+    const s = { ...a, q:0, paid:0, unpaid:0, unknown:0, amt:0, amtPaid:0 };
+    list.forEach(p => { const q = p.qty[a.col] || 0; if (!q) return; const pn = paidN(p, a.col); s.q += q; s.paid += pn; s[statusOf(p) === "unknown" ? "unknown" : "unpaid"] += q - pn; const disc = d2Disc(p); s.amt += subFor(p, a, q, disc); s.amtPaid += subFor(p, a, pn, disc); });
     return s;
   });
 }
@@ -1591,6 +1607,18 @@ function renderBlank(v){
 
 /* ---------- view: synthèse ---------- */
 function chipList(arr){ return arr.length ? `<div class="chips">${arr.map(p=>`<button class="chip" type="button" data-open="${p.uid}">${esc(title(p.name))}</button>`).join("")}</div>` : `<span class="sub">Rien à signaler.</span>`; }
+function d2Panel(people){
+  const members = people.filter(p => p.d2); if (!members.length) return "";
+  const groups = D2_GROUPS.map(g => ({ ...g, n:0, amt:0, paidN:0, paidAmt:0 }));
+  const rows = members.map(p => { const disc = d2Disc(p); let t = 0;
+    Object.entries(disc).forEach(([col, d]) => { const a = S.m.articles.find(x => x.col === +col), g = groups.find(x => x.re.test(norm(a.name))); g.n++; g.amt += d; if (paidN(p, a.col) > 0){ g.paidN++; g.paidAmt += d; } t += d; });
+    return { p, t }; });
+  const tot = groups.reduce((s, g) => s + g.amt, 0), totPaid = groups.reduce((s, g) => s + g.paidAmt, 0);
+  return `<div class="panel"><div class="row"><h3>Frais club · participation Pack D2</h3><span class="sub">${plural(members.length, "adhérent")} en Pack D2 · 50 % pris en charge par le club</span></div>
+    <div class="row"><span><span class="big" style="color:var(--bad)">${fmtEur(tot)}</span> <span class="sub">à la charge du club</span></span><span class="sub">dont ${fmtEur(totPaid)} sur des pièces déjà réglées par l'adhérent</span></div>
+    <div class="artlist">${groups.map(g => `<div class="ar"><span>${esc(g.label)}</span><span class="mini"><b>${g.n}</b> <span class="sub">pièce${g.n > 1 ? "s" : ""} ·</span> <b>${fmtEur(g.amt)}</b></span></div>`).join("")}</div>
+    <div class="chips">${rows.map(({ p, t }) => `<button class="chip" type="button" data-open="${p.uid}">${esc(title(p.name))} · ${t ? fmtEur(t) : "aucun article concerné"}</button>`).join("")}</div></div>`;
+}
 function renderSynthese(v){
   const people = S.m.people, a = agg(people, S.exCap);
   const pct = a.total ? Math.round(a.paid / a.total * 100) : 0, w = x => a.total ? x / a.total * 100 : 0;
@@ -1638,6 +1666,7 @@ function renderSynthese(v){
       <div class="badges"><span class="badge paid">Encaissé · ${fmtEur(a.paid)}</span><span class="badge unpaid">Reste dû · ${fmtEur(a.unpaid)}</span><span class="badge unknown">Non renseigné · ${fmtEur(a.unknown)}</span></div>
     </div>
     <div class="scopes">${scopeCard("cmd")}${scopeCard("day")}</div>
+    ${d2Panel(people)}
     <div class="panel">
       <div class="row"><h3>Préparation des sacs <span class="sub" style="font-family:var(--font-body)">· commandes tenues uniquement</span></h3><span class="badges"><span class="badge prepd">${nPrep} préparé${nPrep>1?"s":""}</span><span class="badge ret">✓ ${nRet} retiré${nRet>1?"s":""}</span><span class="badge todo">${active.length - nPrep} à préparer</span></span></div>
       <div class="track" aria-hidden="true"><span style="width:${wp(nRet)}%;background:var(--good)"></span><span style="width:${wp(nPrep - nRet)}%;background:var(--accent)"></span></div>
@@ -1838,9 +1867,9 @@ function renderDashboard(v){
   const fam = S.dashFam;
   const st = articleStats(list, fam).filter(x => x.q);
   const q = st.reduce((s,x)=>s+x.q,0), qp = st.reduce((s,x)=>s+x.paid,0), qu = st.reduce((s,x)=>s+x.unpaid,0), qn = st.reduce((s,x)=>s+x.unknown,0);
-  const amtP = st.reduce((s,x)=>s+x.paid*x.price,0), amt = st.reduce((s,x)=>s+x.amt,0);
+  const amtP = st.reduce((s,x)=>s+x.amtPaid,0), amt = st.reduce((s,x)=>s+x.amt,0);
   const famParts = FAM_ORDER.map(f => { const s = articleStats(list, f).reduce((t,x)=>t+x.q,0); return { k:FAMS[f].label, v:s, lbl:plural(s,"article"), c:`var(--${f})` }; });
-  const modes = {}; list.forEach(p => (p.tx || []).forEach(t => { const v = S.m.articles.filter(a => fam === "all" || a.fam === fam).reduce((s,a) => s + Math.min(t.items[a.col] || 0, p.qty[a.col] || 0) * a.price, 0); if (!v) return; const k = t.mode || "Non précisé"; modes[k] = (modes[k]||0) + v; }));
+  const modes = {}; list.forEach(p => { const disc = d2Disc(p), seen = {}; (p.tx || []).forEach(t => { const v = S.m.articles.filter(a => fam === "all" || a.fam === fam).reduce((s,a) => { const n = Math.min(t.items[a.col] || 0, p.qty[a.col] || 0); if (!n) return s; const d = !seen[a.col] && disc[a.col] ? disc[a.col] : 0; seen[a.col] = true; return s + n * a.price - d; }, 0); if (!v) return; const k = t.mode || "Non précisé"; modes[k] = (modes[k]||0) + v; }); });
   const pal = ["var(--accent)","var(--c2)","var(--c3)","var(--velo)","var(--autre)"];
   const sizes = {}; orderRows(list).filter(f => fam === "all" || f.fam === fam).forEach(f => f.rows.forEach(r => Object.entries(r.sizes).forEach(([s,x]) => { if (s === "Taille unique") return; sizes[s] = (sizes[s]||0) + x.q; })));
   const sizeRows = Object.entries(sizes).sort((a,b)=>sizeOrder(a[0])-sizeOrder(b[0])).map(([k,v])=>({ k, v, c: k === "À préciser" ? "var(--accent)" : "var(--c2)" }));
@@ -1889,14 +1918,15 @@ function renderFiche(v){
   const focusId = document.activeElement?.id;
   const c = calcV(p), cf = calc(p), cmd = c.sc.cmd, day = c.sc.day, withCmd = hasCmd(p), capNote = S.exCap && cf.total !== c.total;
   const rel = relatedPeople(p), ex = extraNotes(p);
-  const artRow = a => { const q = p.qty[a.col] || 0, pn = paidN(p, a.col);
+  const disc = d2Disc(p);
+  const artRow = a => { const q = p.qty[a.col] || 0, pn = paidN(p, a.col), dd = q ? disc[a.col] || 0 : 0;
     return `<div class="artrow ${q?"on":""}">
-      <div class="an"><b>${esc(a.name)}</b><span class="sub">${a.price ? fmtEur(a.price) : "prix non renseigné"}</span>${q ? (pn >= q ? `<span class="pstate ok">✓ payé</span>` : pn ? `<span class="pstate part">${pn}/${q} payé</span>` : `<span class="pstate no">à payer</span>`) : ""}</div>
+      <div class="an"><b>${esc(a.name)}</b><span class="sub">${a.price ? fmtEur(a.price) : "prix non renseigné"}</span>${q ? (pn >= q ? `<span class="pstate ok">✓ payé</span>` : pn ? `<span class="pstate part">${pn}/${q} payé</span>` : `<span class="pstate no">à payer</span>`) : ""}${dd ? `<span class="pstate d2">Pack D2 : 1 pièce à ${fmtEur(a.price - dd)}</span>` : ""}</div>
       <div class="stepper"><button type="button" id="dec-${a.col}" data-dec="${a.col}" ${q?"":"disabled"} aria-label="Retirer ${esc(a.name)}">−</button><span aria-live="polite">${q}</span><button type="button" id="inc-${a.col}" data-inc="${a.col}" aria-label="Ajouter ${esc(a.name)}">+</button></div>
-      <div class="st">${q ? fmtEur(q*a.price) : ""}</div>
+      <div class="st">${q ? (dd ? `<s class="sub">${fmtEur(q*a.price)}</s> ` : "") + fmtEur(subFor(p, a, q, disc)) : ""}</div>
       ${q && a.fam !== "autre" && !noSize(a.name) ? `<div class="sizes">${(p.sizes[a.col]||[]).map((s,i)=>sizeSelect(a,i,s)).join("")}</div>` : ""}
     </div>`; };
-  const famBlock = f => { const arts = S.m.articles.filter(a => a.fam === f); const fq = arts.reduce((s,a)=>s+(p.qty[a.col]||0),0), famt = arts.reduce((s,a)=>s+(p.qty[a.col]||0)*a.price,0);
+  const famBlock = f => { const arts = S.m.articles.filter(a => a.fam === f); const fq = arts.reduce((s,a)=>s+(p.qty[a.col]||0),0), famt = arts.reduce((s,a)=>s+subFor(p, a, p.qty[a.col]||0, disc),0);
     return `<div class="famsec"><div class="fh"><span class="fam ${f}"></span>${FAMS[f].label}<span class="sub">${fq ? plural(fq,"article") + " · " + fmtEur(famt) : "—"}</span></div>${arts.map(artRow).join("")}</div>`; };
   const scopeBadge = k => c.sc[k].q ? `<span class="badge ${c.sc[k].st} lg">${SCOPES[k].short} : ${STATUS[c.sc[k].st]}</span>` : "";
   v.innerHTML = `
@@ -1905,7 +1935,7 @@ function renderFiche(v){
       <div class="left">
         <label class="lbl" for="fName">Adhérent · ligne ${S.m.people.indexOf(p) + 1} de la liste</label>
         <input id="fName" class="nameinput" value="${esc(p.name)}" placeholder="Nom et prénom">
-        <div class="badges" id="fBadges">${p.conflict ? `<span class="badge conflict lg">⚠ Conflit à revérifier</span>` : ""}${badgeCat(p.cat, true)}${scopeBadge("cmd")}${scopeBadge("day")}${withCmd && p.ref && p.prep ? `<span class="badge sac lg">Sac ${esc(p.ref)}</span>` : ""}${withCmd ? (p.ret ? `<span class="badge ret lg">✓ Retirée</span>` : p.prep ? `<span class="badge prepd lg">Préparée</span>` : "") : ""}</div>
+        <div class="badges" id="fBadges">${p.conflict ? `<span class="badge conflict lg">⚠ Conflit à revérifier</span>` : ""}${badgeCat(p.cat, true)}${p.d2 ? `<span class="badge d2 lg">Pack D2</span>` : ""}${scopeBadge("cmd")}${scopeBadge("day")}${withCmd && p.ref && p.prep ? `<span class="badge sac lg">Sac ${esc(p.ref)}</span>` : ""}${withCmd ? (p.ret ? `<span class="badge ret lg">✓ Retirée</span>` : p.prep ? `<span class="badge prepd lg">Préparée</span>` : "") : ""}</div>
       </div>
       <div class="paybig"><span class="lbl">A payé</span><div class="v" style="color:${c.st==="paid"?"var(--good)":c.st==="partial"?"var(--accent-ink)":"var(--bad)"}">${fmtEur(c.paidAmt)}</div><span class="sub">sur ${fmtEur(c.total)}${c.total - c.paidAmt > 0 ? ` · <b style="color:var(--bad)">reste ${fmtEur(c.total - c.paidAmt)}</b>` : ""}</span>${capNote ? `<span class="sub">hors T Shirt CAP (${fmtEur(cf.total - c.total)})</span>` : ""}${c.total - c.paidAmt > 0 && !S.pay ? `<button type="button" class="btn primary sm" data-paynew="all" style="margin-top:8px;align-self:flex-end">Paiement global (tenues + boutique)</button>` : ""}</div>
     </div>
@@ -1916,7 +1946,8 @@ function renderFiche(v){
       <div class="panel"><h3>Adhérent</h3>
         <div class="field"><span class="lbl">Catégorie</span><div class="segs">
           <button type="button" id="cat-a" class="plain" data-cat="Adulte" aria-pressed="${p.cat==="Adulte"}">Adulte</button>
-          <button type="button" id="cat-j" class="jeune" data-cat="Jeune" aria-pressed="${p.cat==="Jeune"}">Jeune</button></div></div>
+          <button type="button" id="cat-j" class="jeune" data-cat="Jeune" aria-pressed="${p.cat==="Jeune"}">Jeune</button>
+          <label class="d2box ${p.d2 ? "on" : ""}" for="fD2"><input type="checkbox" id="fD2" ${p.d2 ? "checked" : ""}>Pack D2</label></div>${p.d2 ? `<span class="sub">Le club prend en charge 50 % d'une veste vélo et d'un maillot ou T Shirt course à pied${Object.keys(disc).length ? " : " + fmtEur(Object.values(disc).reduce((t,x)=>t+x,0)) + " pour cette commande" : " (aucun article concerné pour l'instant)"}.</span>` : ""}</div>
         <label class="conflictbox ${p.conflict ? "on" : ""}" for="fConflict"><input type="checkbox" id="fConflict" ${p.conflict ? "checked" : ""}>Conflit, à revérifier<span class="sub" style="font-weight:400;margin-left:auto">${p.conflict ? "listé dans la synthèse" : "pour y revenir plus tard"}</span></label>
         <div class="field"><label for="fEmail">E-mail</label><input type="text" id="fEmail" inputmode="email" autocomplete="off" value="${esc(p.email)}" placeholder="adresse@exemple.fr"></div>
         <div class="row">${p.origin ? `<span class="sub">Origine : <b>${esc(p.origin)}</b></span>` : "<span></span>"}<span class="row" style="gap:8px">${S.armedDelete ? `<button type="button" class="linkbtn" id="delCancel">Annuler</button>` : ""}<button type="button" id="delBtn" class="btn sm danger ${S.armedDelete?"armed":""}">${S.armedDelete ? "Confirmer : supprimer la fiche" : "Supprimer la fiche"}</button></span></div>
@@ -1960,6 +1991,7 @@ function renderFiche(v){
   v.querySelectorAll("[data-dec]").forEach(b => b.onclick = () => { const col = +b.dataset.dec; p.qty[col] = Math.max(0,(p.qty[col]||0) - 1); if (!p.qty[col]) delete p.qty[col]; fixSizes(p); rerender(); });
   v.querySelectorAll("[data-size]").forEach(s => s.onchange = () => { p.sizes[+s.dataset.size][+s.dataset.i] = s.value; rerender(); });
   v.querySelectorAll("[data-cat]").forEach(b => b.onclick = () => { p.cat = p.cat === b.dataset.cat ? "" : b.dataset.cat; rerender(); });
+  $("#fD2").onchange = e => { p.d2 = e.target.checked; rerender(); };
   bindPay(v, p, rerender);
   const giveRef = () => { if (!p.ref){ S.m.nextRef = Math.max(S.m.nextRef || 1, nextRefOf(S.m.people)); p.ref = "R" + (S.m.nextRef++); } };
   v.querySelectorAll("[data-prep]").forEach(b => b.onclick = () => { const on = b.dataset.prep === "1"; if (on === p.prep) return; p.prep = on; if (on) giveRef(); else { p.ret = false; p.retDate = ""; } rerender(); });
@@ -1985,7 +2017,7 @@ const nowHM = () => { const d = new Date(); return String(d.getHours()).padStart
 const todayISO = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0"); };
 const isoToFr = s => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || ""); return m ? `${m[3]}/${m[2]}/${m[1]}` : (s || ""); };
 function restOf(p){ return S.m.articles.map(a => ({ a, rest: (p.qty[a.col] || 0) - paidN(p, a.col) })).filter(x => x.rest > 0); }
-function payAmount(p, f){ return Object.entries(f.sel).reduce((s,[col,n]) => s + n * (S.m.articles.find(a => a.col === +col)?.price || 0), 0); }
+function payAmount(p, f){ const disc = d2Disc(p); return Object.entries(f.sel).reduce((s,[col,n]) => { const a = S.m.articles.find(x => x.col === +col); if (!a || !n) return s; return s + n * a.price - (paidN(p, a.col) === 0 ? disc[a.col] || 0 : 0); }, 0); }
 /* payment form shared by the member page and the "Déclarer un paiement" window */
 function payFormHTML(p, f, opts = {}){
   const restAll = restOf(p), amt = f.amountTouched ? f.amount : payAmount(p, f);
