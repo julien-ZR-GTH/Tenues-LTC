@@ -600,21 +600,20 @@ document.addEventListener("change", e => { if (e.target && e.target.id === "exCa
 /* ---------- model ---------- */
 /* pieces of an article covered by the person's payments */
 function paidN(p, col){ const q = p.qty[col] || 0; let n = 0; (p.tx || []).forEach(t => n += +(t.items[col] || 0)); if (q && p.triD2){ const a = S.m.articles.find(x => x.col === +col); if (a) n += freeN(p, a); } return Math.min(q, n); }
-/* Club support, one piece per group:
-   Pack nouvelles D2 = 50 % of one cycling jacket and one running top; Tri montée D2 Club = one trisuit free */
-const D2_GROUPS = [
-  { key:"veste", flag:"d2", rate:0.5, label:"Veste vélo (hiver ou mi-saison)", re:/^veste velo/ },
-  { key:"cap", flag:"d2", rate:0.5, label:"Maillot / T Shirt course à pied", re:/^maillot course a pied|^t shirt cap/ },
-  { key:"tri", flag:"triD2", rate:1, label:"Trifonction (Tri montée D2 Club)", re:/^trifonction/ }];
+/* Club support, shop items never included:
+   Tri montée D2 Club = trisuits, cycling and T Shirt CAP at 0 € (100 % club);
+   Pack nouvelles D2 = cycling and T Shirt CAP at −50 %, trisuits at full price. Tri montée wins if both are ticked. */
+const d2Rate = (p, a) => scopeOf(a.fam) !== "cmd" || !(a.price > 0) ? 0 : p.triD2 ? 1 : p.d2 && a.fam !== "tri" ? 0.5 : 0;
+const unitPrice = (p, a) => Math.round(a.price * (1 - d2Rate(p, a)) * 100) / 100;
+/* Club share per article for the pieces ordered */
 function d2Disc(p){
   const out = {}; if (!p.d2 && !p.triD2) return out;
-  D2_GROUPS.filter(g => p[g.flag]).forEach(g => { const a = S.m.articles.find(x => g.re.test(norm(x.name)) && (p.qty[x.col] || 0) > 0 && x.price > 0); if (a) out[a.col] = Math.round(a.price * g.rate * 100) / 100; });
+  S.m.articles.forEach(a => { const q = p.qty[a.col] || 0, r = d2Rate(p, a); if (q && r) out[a.col] = Math.round(q * (a.price - unitPrice(p, a)) * 100) / 100; });
   return out;
 }
-/* A piece fully paid by the club counts as paid, so nobody is asked to pay 0 € */
-const freeN = (p, a) => { if (!p.triD2) return 0; const d = d2Disc(p)[a.col]; return d && d >= a.price ? 1 : 0; };
-/* Amount for the first n pieces of an article: the discounted piece is always the first one */
-const subFor = (p, a, n, disc) => n > 0 ? n * a.price - ((disc || d2Disc(p))[a.col] || 0) : 0;
+/* Pieces fully paid by the club count as paid, so nobody is asked to pay 0 € */
+const freeN = (p, a) => p.triD2 && d2Rate(p, a) === 1 ? (p.qty[a.col] || 0) : 0;
+const subFor = (p, a, n) => n > 0 ? n * unitPrice(p, a) : 0;
 function calc(p, ex){
   const disc = d2Disc(p); const all = S.m.articles.map(a => { const q = p.qty[a.col] || 0; if (!(q > 0)) return null; const pn = paidN(p, a.col); return { ...a, q, pn, sub: subFor(p, a, q, disc), paidSub: subFor(p, a, pn, disc), d2: disc[a.col] || 0, fr: freeN(p, a) }; }).filter(Boolean);
   const items = ex ? all.filter(i => i.fam !== "cap") : all; /* ex : les T Shirt CAP ne comptent pas dans les paiements */
@@ -969,7 +968,7 @@ function buildWorkbook(){
     ["À commander : total par article et par taille, avec ce qui est déjà réglé."],
     ["Transactions : un paiement par ligne, avec les articles qu'il règle (« Article ×quantité » séparés par « ; »). Commande tenues = trifonctions + vélo ; Achats du jour = goodies, maillot course à pied…"],
     ["Imports Google : réponses de formulaires déjà importées (sert à éviter les doublons). Ne pas modifier."],
-    ["Pack nouvelles D2 (colonne = Oui) : le club prend en charge 50 % d'une veste vélo et d'un maillot ou T Shirt course à pied. Tri montée D2 Club (colonne = Oui) : une trifonction offerte (100 % club). Le TOTAL de la ligne en tient compte."],
+    ["Pack nouvelles D2 (colonne = Oui) : −50 % sur la tenue vélo et les T Shirt CAP, trifonctions au prix normal. Tri montée D2 Club (colonne = Oui) : commande tenues à 0 €, 100 % à la charge du club. La boutique reste au prix normal. Le TOTAL de la ligne en tient compte."],
     ["Mouvements de stock : réceptions de commande et ajustements, une ligne par article et par taille. C'est la source du stock : ne pas modifier à la main."],
     ["État du stock : recalculé à chaque enregistrement. En stock = reçu + ajusté − livré (commandes retirées) ; Disponible = en stock − réservé (commandes pas encore retirées)."],
     ["Vous pouvez corriger les valeurs à la main dans Excel ; gardez les en-têtes et l'ordre des colonnes."]];
@@ -1616,14 +1615,19 @@ function renderBlank(v){
 function chipList(arr){ return arr.length ? `<div class="chips">${arr.map(p=>`<button class="chip" type="button" data-open="${p.uid}">${esc(title(p.name))}</button>`).join("")}</div>` : `<span class="sub">Rien à signaler.</span>`; }
 function d2Panel(people){
   const members = people.filter(p => p.d2 || p.triD2); if (!members.length) return "";
-  const groups = D2_GROUPS.map(g => ({ ...g, n:0, amt:0, paidN:0, paidAmt:0 }));
-  const rows = members.map(p => { const disc = d2Disc(p); let t = 0;
-    Object.entries(disc).forEach(([col, d]) => { const a = S.m.articles.find(x => x.col === +col), g = groups.find(x => x.re.test(norm(a.name))); g.n++; g.amt += d; if (g.rate < 1 && paidN(p, a.col) > 0){ g.paidN++; g.paidAmt += d; } t += d; });
+  const packs = [{ k:"tri", label:"Tri montée D2 Club (100 %)", test: p => p.triD2 }, { k:"d2", label:"Pack nouvelles D2 (50 %)", test: p => p.d2 && !p.triD2 }]
+    .map(x => ({ ...x, n:0, amt:0, fams:{} }));
+  let paidAmt = 0;
+  const rows = members.map(p => { const pk = packs.find(x => x.test(p)); pk.n++; let t = 0;
+    Object.entries(d2Disc(p)).forEach(([col, d]) => { const a = S.m.articles.find(x => x.col === +col), f = pk.fams[a.fam] || (pk.fams[a.fam] = { q:0, amt:0 });
+      f.q += p.qty[a.col] || 0; f.amt += d; pk.amt += d; t += d;
+      if (!p.triD2) paidAmt += Math.min(paidN(p, a.col), p.qty[a.col] || 0) * (a.price - unitPrice(p, a)); });
     return { p, t }; });
-  const tot = groups.reduce((s, g) => s + g.amt, 0), totPaid = groups.reduce((s, g) => s + g.paidAmt, 0);
-  return `<div class="panel"><div class="row"><h3>Frais club · participation D2</h3><span class="sub">${plural(members.filter(p => p.d2).length, "adhérent")} en Pack nouvelles D2 (50 %) · ${plural(members.filter(p => p.triD2).length, "adhérent")} en Tri montée D2 Club (100 %)</span></div>
-    <div class="row"><span><span class="big" style="color:var(--bad)">${fmtEur(tot)}</span> <span class="sub">à la charge du club</span></span><span class="sub">dont ${fmtEur(totPaid)} sur des pièces déjà réglées par l'adhérent</span></div>
-    <div class="artlist">${groups.filter(g => g.n || members.some(p => p[g.flag])).map(g => `<div class="ar"><span>${esc(g.label)}</span><span class="mini"><b>${g.n}</b> <span class="sub">pièce${g.n > 1 ? "s" : ""} ·</span> <b>${fmtEur(g.amt)}</b></span></div>`).join("")}</div>
+  const tot = packs.reduce((s, x) => s + x.amt, 0);
+  return `<div class="panel"><div class="row"><h3>Frais club · participation D2</h3><span class="sub">${packs.map(x => `${plural(x.n, "adhérent")} en ${x.label}`).join(" · ")}</span></div>
+    <div class="row"><span><span class="big" style="color:var(--bad)">${fmtEur(tot)}</span> <span class="sub">à la charge du club</span></span>${paidAmt ? `<span class="sub">dont ${fmtEur(paidAmt)} sur des pièces Pack nouvelles D2 déjà réglées par l'adhérent</span>` : ""}</div>
+    <div class="artlist">${packs.filter(x => x.n).map(x => `<div class="ar"><span><b>${esc(x.label)}</b></span><span class="mini"><b>${fmtEur(x.amt)}</b></span></div>` +
+      FAM_ORDER.filter(f => x.fams[f]).map(f => `<div class="ar"><span class="sub">${FAMS[f].label}</span><span class="mini">${x.fams[f].q} <span class="sub">pièce${x.fams[f].q > 1 ? "s" : ""} ·</span> ${fmtEur(x.fams[f].amt)}</span></div>`).join("")).join("")}</div>
     <div class="chips">${rows.map(({ p, t }) => `<button class="chip" type="button" data-open="${p.uid}">${esc(title(p.name))}${p.triD2 ? " (Tri)" : ""} · ${t ? fmtEur(t) : "aucun article concerné"}</button>`).join("")}</div></div>`;
 }
 function renderSynthese(v){
@@ -1876,7 +1880,7 @@ function renderDashboard(v){
   const q = st.reduce((s,x)=>s+x.q,0), qp = st.reduce((s,x)=>s+x.paid,0), qu = st.reduce((s,x)=>s+x.unpaid,0), qn = st.reduce((s,x)=>s+x.unknown,0);
   const amtP = st.reduce((s,x)=>s+x.amtPaid,0), amt = st.reduce((s,x)=>s+x.amt,0);
   const famParts = FAM_ORDER.map(f => { const s = articleStats(list, f).reduce((t,x)=>t+x.q,0); return { k:FAMS[f].label, v:s, lbl:plural(s,"article"), c:`var(--${f})` }; });
-  const modes = {}; list.forEach(p => { const disc = d2Disc(p), seen = {}; (p.tx || []).forEach(t => { const v = S.m.articles.filter(a => fam === "all" || a.fam === fam).reduce((s,a) => { const n = Math.min(t.items[a.col] || 0, p.qty[a.col] || 0); if (!n) return s; const d = !seen[a.col] && disc[a.col] ? disc[a.col] : 0; seen[a.col] = true; return s + n * a.price - d; }, 0); if (!v) return; const k = t.mode || "Non précisé"; modes[k] = (modes[k]||0) + v; }); });
+  const modes = {}; list.forEach(p => { (p.tx || []).forEach(t => { const v = S.m.articles.filter(a => fam === "all" || a.fam === fam).reduce((s,a) => { const n = Math.min(t.items[a.col] || 0, p.qty[a.col] || 0); if (!n) return s; return s + n * unitPrice(p, a); }, 0); if (!v) return; const k = t.mode || "Non précisé"; modes[k] = (modes[k]||0) + v; }); });
   const pal = ["var(--accent)","var(--c2)","var(--c3)","var(--velo)","var(--autre)"];
   const sizes = {}; orderRows(list).filter(f => fam === "all" || f.fam === fam).forEach(f => f.rows.forEach(r => Object.entries(r.sizes).forEach(([s,x]) => { if (s === "Taille unique") return; sizes[s] = (sizes[s]||0) + x.q; })));
   const sizeRows = Object.entries(sizes).sort((a,b)=>sizeOrder(a[0])-sizeOrder(b[0])).map(([k,v])=>({ k, v, c: k === "À préciser" ? "var(--accent)" : "var(--c2)" }));
@@ -1928,7 +1932,7 @@ function renderFiche(v){
   const disc = d2Disc(p);
   const artRow = a => { const q = p.qty[a.col] || 0, pn = paidN(p, a.col), dd = q ? disc[a.col] || 0 : 0;
     return `<div class="artrow ${q?"on":""}">
-      <div class="an"><b>${esc(a.name)}</b><span class="sub">${a.price ? fmtEur(a.price) : "prix non renseigné"}</span>${q ? (pn >= q ? `<span class="pstate ok">✓ payé</span>` : pn ? `<span class="pstate part">${pn}/${q} payé</span>` : `<span class="pstate no">à payer</span>`) : ""}${dd ? `<span class="pstate d2">${dd >= a.price ? "Tri montée D2 Club : 1 pièce prise en charge par le club" : "Pack nouvelles D2 : 1 pièce à " + fmtEur(a.price - dd)}</span>` : ""}</div>
+      <div class="an"><b>${esc(a.name)}</b><span class="sub">${a.price ? fmtEur(a.price) : "prix non renseigné"}</span>${q ? (pn >= q ? `<span class="pstate ok">✓ payé</span>` : pn ? `<span class="pstate part">${pn}/${q} payé</span>` : `<span class="pstate no">à payer</span>`) : ""}${dd ? `<span class="pstate d2">${unitPrice(p, a) === 0 ? "Tri montée D2 Club : offert par le club" : "Pack nouvelles D2 : −50 %, " + fmtEur(unitPrice(p, a)) + " la pièce"}</span>` : ""}</div>
       <div class="stepper"><button type="button" id="dec-${a.col}" data-dec="${a.col}" ${q?"":"disabled"} aria-label="Retirer ${esc(a.name)}">−</button><span aria-live="polite">${q}</span><button type="button" id="inc-${a.col}" data-inc="${a.col}" aria-label="Ajouter ${esc(a.name)}">+</button></div>
       <div class="st">${q ? (dd ? `<s class="sub">${fmtEur(q*a.price)}</s> ` : "") + fmtEur(subFor(p, a, q, disc)) : ""}</div>
       ${q && a.fam !== "autre" && !noSize(a.name) ? `<div class="sizes">${(p.sizes[a.col]||[]).map((s,i)=>sizeSelect(a,i,s)).join("")}</div>` : ""}
@@ -1955,7 +1959,7 @@ function renderFiche(v){
           <button type="button" id="cat-a" class="plain" data-cat="Adulte" aria-pressed="${p.cat==="Adulte"}">Adulte</button>
           <button type="button" id="cat-j" class="jeune" data-cat="Jeune" aria-pressed="${p.cat==="Jeune"}">Jeune</button>
           <label class="d2box ${p.d2 ? "on" : ""}" for="fD2"><input type="checkbox" id="fD2" ${p.d2 ? "checked" : ""}>Pack nouvelles D2</label>
-          <label class="d2box ${p.triD2 ? "on" : ""}" for="fTriD2"><input type="checkbox" id="fTriD2" ${p.triD2 ? "checked" : ""}>Tri montée D2 Club</label></div>${p.d2 || p.triD2 ? `<span class="sub">Le club prend en charge ${[p.d2 ? "50 % d'une veste vélo et d'un maillot ou T Shirt course à pied" : "", p.triD2 ? "100 % d'une trifonction" : ""].filter(Boolean).join(" et ")}${Object.keys(disc).length ? " : " + fmtEur(Object.values(disc).reduce((t,x)=>t+x,0)) + " pour cette commande" : " (aucun article concerné pour l'instant)"}.</span>` : ""}</div>
+          <label class="d2box ${p.triD2 ? "on" : ""}" for="fTriD2"><input type="checkbox" id="fTriD2" ${p.triD2 ? "checked" : ""}>Tri montée D2 Club</label></div>${p.d2 || p.triD2 ? `<span class="sub">Le club prend en charge ${p.triD2 ? "100 % de la commande tenues (trifonctions, vélo, T Shirt CAP ; boutique au prix normal)" : "50 % de la tenue vélo et des T Shirt CAP (trifonctions et boutique au prix normal)"}${Object.keys(disc).length ? " : " + fmtEur(Object.values(disc).reduce((t,x)=>t+x,0)) + " pour cette commande" : " (aucun article concerné pour l'instant)"}.</span>` : ""}</div>
         <label class="conflictbox ${p.conflict ? "on" : ""}" for="fConflict"><input type="checkbox" id="fConflict" ${p.conflict ? "checked" : ""}>Conflit, à revérifier<span class="sub" style="font-weight:400;margin-left:auto">${p.conflict ? "listé dans la synthèse" : "pour y revenir plus tard"}</span></label>
         <div class="field"><label for="fEmail">E-mail</label><input type="text" id="fEmail" inputmode="email" autocomplete="off" value="${esc(p.email)}" placeholder="adresse@exemple.fr"></div>
         <div class="row">${p.origin ? `<span class="sub">Origine : <b>${esc(p.origin)}</b></span>` : "<span></span>"}<span class="row" style="gap:8px">${S.armedDelete ? `<button type="button" class="linkbtn" id="delCancel">Annuler</button>` : ""}<button type="button" id="delBtn" class="btn sm danger ${S.armedDelete?"armed":""}">${S.armedDelete ? "Confirmer : supprimer la fiche" : "Supprimer la fiche"}</button></span></div>
@@ -2026,7 +2030,7 @@ const nowHM = () => { const d = new Date(); return String(d.getHours()).padStart
 const todayISO = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0"); };
 const isoToFr = s => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || ""); return m ? `${m[3]}/${m[2]}/${m[1]}` : (s || ""); };
 function restOf(p){ return S.m.articles.map(a => ({ a, rest: (p.qty[a.col] || 0) - paidN(p, a.col) })).filter(x => x.rest > 0); }
-function payAmount(p, f){ const disc = d2Disc(p); return Object.entries(f.sel).reduce((s,[col,n]) => { const a = S.m.articles.find(x => x.col === +col); if (!a || !n) return s; return s + n * a.price - (paidN(p, a.col) === 0 ? disc[a.col] || 0 : 0); }, 0); }
+function payAmount(p, f){ return Object.entries(f.sel).reduce((s,[col,n]) => { const a = S.m.articles.find(x => x.col === +col); if (!a || !n) return s; return s + n * unitPrice(p, a); }, 0); }
 /* payment form shared by the member page and the "Déclarer un paiement" window */
 function payFormHTML(p, f, opts = {}){
   const restAll = restOf(p), amt = f.amountTouched ? f.amount : payAmount(p, f);
